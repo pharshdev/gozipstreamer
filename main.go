@@ -80,10 +80,10 @@ func traverseFolder(path, parentZipPath string, files *[]File, rootPath string) 
 		return err
 	}
 
-	// ✅ Compute the correct relative path
+	// ✅ Compute correct relative path including the root folder name
 	var relativeZipPath string
 	if path == rootPath {
-		relativeZipPath = "" // Root folder should not be included in paths
+		relativeZipPath = filepath.Base(rootPath) // ✅ Use the root folder name
 	} else {
 		relativeZipPath = filepath.Join(parentZipPath, apiResponse.Name)
 	}
@@ -95,7 +95,7 @@ func traverseFolder(path, parentZipPath string, files *[]File, rootPath string) 
 
 	// ✅ Traverse contents of the folder
 	for _, item := range apiResponse.Content {
-		currentZipPath := filepath.Join(relativeZipPath, item.Name) // ✅ Ensures proper nesting
+		currentZipPath := filepath.Join(relativeZipPath, item.Name) // ✅ Keeps root folder name
 
 		if item.Type == "file" {
 			*files = append(*files, File{
@@ -103,7 +103,7 @@ func traverseFolder(path, parentZipPath string, files *[]File, rootPath string) 
 				ZipPath: currentZipPath,
 			})
 		} else if item.Type == "folder" {
-			// ✅ Pass `relativeZipPath` correctly to maintain folder hierarchy
+			// ✅ Pass `relativeZipPath` to keep root folder name in subfolders
 			err := traverseFolder(filepath.Join(path, item.Name), relativeZipPath, files, rootPath)
 			if err != nil {
 				return err
@@ -116,17 +116,19 @@ func traverseFolder(path, parentZipPath string, files *[]File, rootPath string) 
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Println("Usage: go run main.go <path>")
+		fmt.Println("Usage: go run main.go <path1> <path2> ... <pathN>")
 		return
 	}
 
-	rootPath := os.Args[1]
 	var files []File
 
-	// ✅ Start traversal with an empty parent path
-	if err := traverseFolder(rootPath, "", &files, rootPath); err != nil {
-		fmt.Printf("Error: %v\n", err)
-		return
+	// ✅ Process multiple paths
+	for _, rootPath := range os.Args[1:] {
+		fmt.Printf("Processing folder: %s\n", rootPath)
+		err := traverseFolder(rootPath, "", &files, rootPath)
+		if err != nil {
+			fmt.Printf("Error processing %s: %v\n", rootPath, err)
+		}
 	}
 
 	descriptor := Descriptor{
