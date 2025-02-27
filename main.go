@@ -17,7 +17,7 @@ const (
 
 // File represents a file entry in the JSON descriptor
 type File struct {
-	URL     string `json:"url"`
+	URL     string `json:"url,omitempty"`
 	ZipPath string `json:"zipPath"`
 }
 
@@ -34,8 +34,11 @@ type APIResponse struct {
 		ID         string `json:"id"`
 		Name       string `json:"name"`
 		Type       string `json:"type"`
-		DirectLink string `json:"directlink"`
+		DirectLink string `json:"directlink,omitempty"`
 	} `json:"content"`
+	Name     string `json:"name"`
+	FolderID string `json:"folder_id"`
+	ParentID string `json:"parent_id"`
 }
 
 // fetchFolderContents retrieves the contents of a folder from the Premiumize.me API
@@ -71,21 +74,38 @@ func fetchFolderContents(path string) (*APIResponse, error) {
 }
 
 // traverseFolder recursively traverses the folder and its subfolders to build the file list
-func traverseFolder(path, parentZipPath string, files *[]File) error {
+func traverseFolder(path, parentZipPath string, files *[]File, rootPath string) error {
 	apiResponse, err := fetchFolderContents(path)
 	if err != nil {
 		return err
 	}
 
+	// ✅ Compute the correct relative path
+	var relativeZipPath string
+	if path == rootPath {
+		relativeZipPath = "" // Root folder should not be included in paths
+	} else {
+		relativeZipPath = filepath.Join(parentZipPath, apiResponse.Name)
+	}
+
+	// ✅ Ignore empty folders
+	if len(apiResponse.Content) == 0 {
+		return nil
+	}
+
+	// ✅ Traverse contents of the folder
 	for _, item := range apiResponse.Content {
-		currentZipPath := filepath.Join(parentZipPath, item.Name)
+		currentZipPath := filepath.Join(relativeZipPath, item.Name) // ✅ Ensures proper nesting
+
 		if item.Type == "file" {
 			*files = append(*files, File{
 				URL:     item.DirectLink,
 				ZipPath: currentZipPath,
 			})
 		} else if item.Type == "folder" {
-			if err := traverseFolder(filepath.Join(path, item.Name), currentZipPath, files); err != nil {
+			// ✅ Pass `relativeZipPath` correctly to maintain folder hierarchy
+			err := traverseFolder(filepath.Join(path, item.Name), relativeZipPath, files, rootPath)
+			if err != nil {
 				return err
 			}
 		}
@@ -103,7 +123,8 @@ func main() {
 	rootPath := os.Args[1]
 	var files []File
 
-	if err := traverseFolder(rootPath, "", &files); err != nil {
+	// ✅ Start traversal with an empty parent path
+	if err := traverseFolder(rootPath, "", &files, rootPath); err != nil {
 		fmt.Printf("Error: %v\n", err)
 		return
 	}
