@@ -1,0 +1,11 @@
+{
+  "suggestedFilename":"download.zip",
+  "files": [
+    {
+      "url":"https://2-cdn2-ovh-fra.energycdn.com/cdn3sto/educatedcrab-sto/6540dced1b9266.31411911/694180459/1740653652/35af86d975ee56e3092d690d63e3be91d254fbda/4a323026282364df4b8395d01f2c1fb349722d918a3a2f6dd434437711a67d92/English.srt",
+      "zipPath":"Subs/English.srt"
+    },{
+      "url":"https://0-cdn2-ovh-fra.energycdn.com/cdn3sto/brilliantcricket-sto/5e35cf3fa583b2.81146451/694180459/1740653627/35af86d975ee56e3092d690d63e3be91d254fbda/08a9be5ed4032cd7cda7e108c26a99eb1cb0d59122008cd97a46c695d6c8a6a3/www.YTS.MX.jpg",
+      "zipPath":"www.YTS.MX.jpg"}
+  ]
+}
