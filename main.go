@@ -1,18 +1,21 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
+
+	"github.com/gorilla/mux"
 )
 
 const (
-	apiKey     = "2x5dfzb2cm69f5c6" // Replace with your actual Premiumize.me API key
-	apiBaseURL = "https://www.premiumize.me/api/folder/list"
+	zipStreamerURL = "http://localhost:8080/download" // ZipStreamer API URL
 )
 
 // File represents a file entry in the JSON descriptor
@@ -42,9 +45,9 @@ type APIResponse struct {
 }
 
 // fetchFolderContents retrieves the contents of a folder from the Premiumize.me API
-func fetchFolderContents(path string) (*APIResponse, error) {
-	encodedPath := url.QueryEscape(path)
-	apiURL := fmt.Sprintf("%s?apikey=%s&path=%s", apiBaseURL, apiKey, encodedPath)
+func fetchFolderContents(apiKey, path string) (*APIResponse, error) {
+	encodedPath := strings.ReplaceAll(path, " ", "%20") // Encode spaces
+	apiURL := fmt.Sprintf("https://www.premiumize.me/api/folder/list?apikey=%s&path=%s", apiKey, encodedPath)
 
 	resp, err := http.Get(apiURL)
 	if err != nil {
@@ -74,8 +77,8 @@ func fetchFolderContents(path string) (*APIResponse, error) {
 }
 
 // traverseFolder recursively traverses the folder and its subfolders to build the file list
-func traverseFolder(path, parentZipPath string, files *[]File, rootPath string) error {
-	apiResponse, err := fetchFolderContents(path)
+func traverseFolder(apiKey, path, parentZipPath string, files *[]File, rootPath string) error {
+	apiResponse, err := fetchFolderContents(apiKey, path)
 	if err != nil {
 		return err
 	}
@@ -103,8 +106,8 @@ func traverseFolder(path, parentZipPath string, files *[]File, rootPath string) 
 				ZipPath: currentZipPath,
 			})
 		} else if item.Type == "folder" {
-			// ✅ Pass `relativeZipPath` to keep root folder name in subfolders
-			err := traverseFolder(filepath.Join(path, item.Name), relativeZipPath, files, rootPath)
+			// ✅ Pass `relativeZipPath` correctly to maintain folder hierarchy
+			err := traverseFolder(apiKey, filepath.Join(path, item.Name), relativeZipPath, files, rootPath)
 			if err != nil {
 				return err
 			}
@@ -114,38 +117,94 @@ func traverseFolder(path, parentZipPath string, files *[]File, rootPath string) 
 	return nil
 }
 
-func main() {
-	if len(os.Args) < 2 {
-		fmt.Println("Usage: go run main.go <path1> <path2> ... <pathN>")
-		return
-	}
-
+// createDescriptor generates descriptor.json from multiple paths
+func createDescriptor(apiKey string, paths []string) (*Descriptor, error) {
 	var files []File
 
 	// ✅ Process multiple paths
-	for _, rootPath := range os.Args[1:] {
+	for _, rootPath := range paths {
 		fmt.Printf("Processing folder: %s\n", rootPath)
-		err := traverseFolder(rootPath, "", &files, rootPath)
+		err := traverseFolder(apiKey, rootPath, "", &files, rootPath)
 		if err != nil {
 			fmt.Printf("Error processing %s: %v\n", rootPath, err)
 		}
 	}
 
-	descriptor := Descriptor{
+	descriptor := &Descriptor{
 		SuggestedFilename: "archive.zip",
 		Files:             files,
 	}
 
-	jsonData, err := json.MarshalIndent(descriptor, "", "  ")
+	return descriptor, nil
+}
+
+// zipHandler handles API requests to generate ZIP
+func zipHandler(w http.ResponseWriter, r *http.Request) {
+	// ✅ Parse request body
+	var requestData struct {
+		ApiKey string   `json:"apikey"`
+		Paths  []string `json:"paths"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&requestData); err != nil {
+		http.Error(w, "Invalid JSON request", http.StatusBadRequest)
+		return
+	}
+
+	if requestData.ApiKey == "" || len(requestData.Paths) == 0 {
+		http.Error(w, "Missing API key or paths", http.StatusBadRequest)
+		return
+	}
+
+	// ✅ Generate descriptor.json dynamically
+	descriptor, err := createDescriptor(requestData.ApiKey, requestData.Paths)
 	if err != nil {
-		fmt.Printf("Failed to marshal JSON: %v\n", err)
+		http.Error(w, fmt.Sprintf("Failed to generate descriptor: %v", err), http.StatusInternalServerError)
 		return
 	}
 
-	if err := ioutil.WriteFile("descriptor.json", jsonData, 0644); err != nil {
-		fmt.Printf("Failed to write JSON to file: %v\n", err)
+	// ✅ Convert descriptor to JSON
+	descriptorJSON, err := json.Marshal(descriptor)
+	if err != nil {
+		http.Error(w, "Failed to marshal descriptor JSON", http.StatusInternalServerError)
 		return
 	}
 
-	fmt.Println("JSON descriptor created successfully: descriptor.json")
+	// ✅ Send descriptor.json to ZipStreamer
+	fmt.Println("Sending descriptor to ZipStreamer...")
+	resp, err := http.Post(zipStreamerURL, "application/json", bytes.NewBuffer(descriptorJSON))
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to connect to ZipStreamer: %v", err), http.StatusInternalServerError)
+		return
+	}
+	defer resp.Body.Close()
+
+	// ✅ Debug response from ZipStreamer
+	fmt.Printf("ZipStreamer Response Status: %s\n", resp.Status)
+	body, _ := ioutil.ReadAll(resp.Body)
+	fmt.Printf("ZipStreamer Response Body: %s\n", string(body))
+
+	// ✅ If ZipStreamer returns an error, send it to the client
+	if resp.StatusCode != http.StatusOK {
+		http.Error(w, fmt.Sprintf("ZipStreamer Error: %s", string(body)), http.StatusBadGateway)
+		return
+	}
+
+	// ✅ Stream ZIP response back to client
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition", "attachment; filename=archive.zip")
+	io.Copy(w, bytes.NewReader(body)) // Ensure proper streaming
+}
+
+func main() {
+	// ✅ Set up the API server
+	r := mux.NewRouter()
+	r.HandleFunc("/create-zip", zipHandler).Methods("POST")
+
+	fmt.Println("Server started on :8000")
+
+	// ✅ Keep the server running and handle errors
+	if err := http.ListenAndServe(":8000", r); err != nil {
+		fmt.Printf("Error starting server: %v\n", err)
+		os.Exit(1) // ✅ Exit with error if server fails
+	}
 }
