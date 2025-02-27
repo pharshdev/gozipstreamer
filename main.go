@@ -145,23 +145,57 @@ func createDescriptor(apiKey string, paths []string) (*Descriptor, error) {
 
 // zipHandler handles API requests to generate ZIP
 func zipHandler(w http.ResponseWriter, r *http.Request) {
-	// ✅ Parse request body
-	var requestData struct {
-		ApiKey string   `json:"apikey"`
-		Paths  []string `json:"paths"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&requestData); err != nil {
-		http.Error(w, "Invalid JSON request", http.StatusBadRequest)
+	// ✅ Support GET requests
+	if r.Method == "GET" {
+		apiKey := r.URL.Query().Get("apikey")
+		pathsParam := r.URL.Query().Get("paths")
+
+		if apiKey == "" || pathsParam == "" {
+			http.Error(w, "Missing API key or paths", http.StatusBadRequest)
+			return
+		}
+
+		// ✅ Decode paths JSON from query string
+		var paths []string
+		err := json.Unmarshal([]byte(pathsParam), &paths)
+		if err != nil {
+			http.Error(w, "Invalid paths parameter", http.StatusBadRequest)
+			return
+		}
+
+		// ✅ Call the function to process paths
+		processZipRequest(w, apiKey, paths)
 		return
 	}
 
-	if requestData.ApiKey == "" || len(requestData.Paths) == 0 {
-		http.Error(w, "Missing API key or paths", http.StatusBadRequest)
+	// ✅ Support POST requests (for API calls)
+	if r.Method == "POST" {
+		var requestData struct {
+			ApiKey string   `json:"apikey"`
+			Paths  []string `json:"paths"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&requestData); err != nil {
+			http.Error(w, "Invalid JSON request", http.StatusBadRequest)
+			return
+		}
+
+		if requestData.ApiKey == "" || len(requestData.Paths) == 0 {
+			http.Error(w, "Missing API key or paths", http.StatusBadRequest)
+			return
+		}
+
+		// ✅ Call the function to process paths
+		processZipRequest(w, requestData.ApiKey, requestData.Paths)
 		return
 	}
 
+	http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+}
+
+// ✅ Function to handle ZIP processing (used for both GET and POST)
+func processZipRequest(w http.ResponseWriter, apiKey string, paths []string) {
 	// ✅ Generate descriptor.json dynamically
-	descriptor, err := createDescriptor(requestData.ApiKey, requestData.Paths)
+	descriptor, err := createDescriptor(apiKey, paths)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to generate descriptor: %v", err), http.StatusInternalServerError)
 		return
@@ -182,7 +216,7 @@ func zipHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 
-	// ✅ Stream ZIP response back to client
+	// ✅ Stream ZIP response back to client (triggers file download)
 	w.Header().Set("Content-Type", "application/zip")
 	w.Header().Set("Content-Disposition", "attachment; filename=archive.zip")
 	io.Copy(w, resp.Body)
@@ -199,7 +233,7 @@ func main() {
 	r.PathPrefix("/static/").Handler(http.StripPrefix("/static/", http.FileServer(http.Dir("static"))))
 
 	// Handle ZIP creation
-	r.HandleFunc("/create-zip", zipHandler).Methods("POST")
+	r.HandleFunc("/create-zip", zipHandler).Methods("GET", "POST")
 
 	fmt.Println("Server started on :8000")
 	if err := http.ListenAndServe(":8000", r); err != nil {

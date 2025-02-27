@@ -55,36 +55,11 @@
                 return;
             }
 
-            const requestData = {
-                apikey: apikey,
-                paths: paths
-            };
+            // ✅ Convert paths array to a JSON string and encode it for URL
+            const encodedPaths = encodeURIComponent(JSON.stringify(paths));
 
-            fetch("http://localhost:8000/create-zip", {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json"
-                },
-                body: JSON.stringify(requestData)
-            })
-            .then(response => {
-                if (!response.ok) {
-                    throw new Error("Failed to generate ZIP");
-                }
-                return response.blob();
-            })
-            .then(blob => {
-                const url = window.URL.createObjectURL(blob);
-                const a = document.createElement("a");
-                a.href = url;
-                a.download = "archive.zip";
-                document.body.appendChild(a);
-                a.click();
-                window.URL.revokeObjectURL(url);
-            })
-            .catch(error => {
-                alert("Error: " + error.message);
-            });
+            // ✅ Redirect to the API endpoint with query parameters (triggers file download)
+            window.location.href = `http://localhost:8000/create-zip?apikey=${apikey}&paths=${encodedPaths}`;
         }
     </script>
 
