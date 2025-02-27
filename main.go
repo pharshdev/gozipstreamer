@@ -44,6 +44,11 @@ type APIResponse struct {
 	ParentID string `json:"parent_id"`
 }
 
+// Serve the HTML page
+func serveHTML(w http.ResponseWriter, r *http.Request) {
+	http.ServeFile(w, r, "index.html")
+}
+
 // fetchFolderContents retrieves the contents of a folder from the Premiumize.me API
 func fetchFolderContents(apiKey, path string) (*APIResponse, error) {
 	encodedPath := strings.ReplaceAll(path, " ", "%20") // Encode spaces
@@ -170,7 +175,6 @@ func zipHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// ✅ Send descriptor.json to ZipStreamer
-	fmt.Println("Sending descriptor to ZipStreamer...")
 	resp, err := http.Post(zipStreamerURL, "application/json", bytes.NewBuffer(descriptorJSON))
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to connect to ZipStreamer: %v", err), http.StatusInternalServerError)
@@ -178,33 +182,28 @@ func zipHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 
-	// ✅ Debug response from ZipStreamer
-	fmt.Printf("ZipStreamer Response Status: %s\n", resp.Status)
-	body, _ := ioutil.ReadAll(resp.Body)
-	fmt.Printf("ZipStreamer Response Body: %s\n", string(body))
-
-	// ✅ If ZipStreamer returns an error, send it to the client
-	if resp.StatusCode != http.StatusOK {
-		http.Error(w, fmt.Sprintf("ZipStreamer Error: %s", string(body)), http.StatusBadGateway)
-		return
-	}
-
 	// ✅ Stream ZIP response back to client
 	w.Header().Set("Content-Type", "application/zip")
 	w.Header().Set("Content-Disposition", "attachment; filename=archive.zip")
-	io.Copy(w, bytes.NewReader(body)) // Ensure proper streaming
+	io.Copy(w, resp.Body)
 }
 
 func main() {
 	// ✅ Set up the API server
 	r := mux.NewRouter()
+
+	// Serve the web page
+	r.HandleFunc("/", serveHTML).Methods("GET")
+
+	// Serve static files (for CSS, JS, images if needed)
+	r.PathPrefix("/static/").Handler(http.StripPrefix("/static/", http.FileServer(http.Dir("static"))))
+
+	// Handle ZIP creation
 	r.HandleFunc("/create-zip", zipHandler).Methods("POST")
 
 	fmt.Println("Server started on :8000")
-
-	// ✅ Keep the server running and handle errors
 	if err := http.ListenAndServe(":8000", r); err != nil {
 		fmt.Printf("Error starting server: %v\n", err)
-		os.Exit(1) // ✅ Exit with error if server fails
+		os.Exit(1)
 	}
 }

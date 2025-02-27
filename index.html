@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GoZipStreamer</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            text-align: center;
+            margin: 50px;
+        }
+        h1 {
+            color: #333;
+        }
+        input, textarea {
+            width: 80%;
+            padding: 10px;
+            margin: 10px 0;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            font-size: 16px;
+        }
+        button {
+            background-color: #28a745;
+            color: white;
+            border: none;
+            padding: 12px 20px;
+            font-size: 16px;
+            cursor: pointer;
+            border-radius: 5px;
+        }
+        button:hover {
+            background-color: #218838;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>GoZipStreamer</h1>
+
+    <input type="text" id="apikey" placeholder="Enter API Key">
+    <br>
+    <textarea id="paths" rows="4" placeholder="Enter paths, one per line"></textarea>
+    <br>
+    <button onclick="downloadZip()">Download ZIP</button>
+
+    <script>
+        function downloadZip() {
+            const apikey = document.getElementById("apikey").value.trim();
+            const paths = document.getElementById("paths").value.trim().split("\n").map(path => path.trim()).filter(path => path.length > 0);
+
+            if (!apikey || paths.length === 0) {
+                alert("Please enter both API Key and at least one path.");
+                return;
+            }
+
+            const requestData = {
+                apikey: apikey,
+                paths: paths
+            };
+
+            fetch("http://localhost:8000/create-zip", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify(requestData)
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error("Failed to generate ZIP");
+                }
+                return response.blob();
+            })
+            .then(blob => {
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = "archive.zip";
+                document.body.appendChild(a);
+                a.click();
+                window.URL.revokeObjectURL(url);
+            })
+            .catch(error => {
+                alert("Error: " + error.message);
+            });
+        }
+    </script>
+
+</body>
+</html>
