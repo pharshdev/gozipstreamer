@@ -1,14 +1,14 @@
 package main
 
 import (
+	"archive/zip"
 	"encoding/json"
 	"fmt"
+	"gozipstreamer/zipstreamer"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
-
-	"gozipstreamer/zipstreamer"
 
 	"github.com/gorilla/mux"
 )
@@ -154,15 +154,28 @@ func zipHandler(w http.ResponseWriter, r *http.Request) {
 func processZipRequest(w http.ResponseWriter, apiKey string, paths []string) {
 	var fileEntries []*zipstreamer.FileEntry
 
+	// Recursively fetch all files and subfolders
 	for _, rootPath := range paths {
 		fmt.Printf("Processing folder: %s\n", rootPath)
-		err := traverseFolder(apiKey, rootPath, "", &fileEntries, rootPath) // Pass correct type
+		err := traverseFolder(apiKey, rootPath, "", &fileEntries, rootPath)
 		if err != nil {
 			fmt.Printf("Error processing %s: %v\n", rootPath, err)
 		}
 	}
 
-	// Create ZIP stream
+	// Handle case when no files are found
+	if len(fileEntries) == 0 {
+		fmt.Println("Empty folder detected. Returning an empty ZIP.")
+		w.Header().Set("Content-Type", "application/zip")
+		w.Header().Set("Content-Disposition", "attachment; filename=empty.zip")
+
+		// Create an empty ZIP file in memory
+		zipWriter := zip.NewWriter(w)
+		zipWriter.Close() // Close immediately to create an empty ZIP structure
+		return
+	}
+
+	// Create ZIP stream with the collected files
 	zipStream, err := zipstreamer.NewZipStream(fileEntries, w)
 	if err != nil {
 		http.Error(w, "Failed to create ZIP stream", http.StatusInternalServerError)
