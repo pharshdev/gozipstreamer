@@ -59,7 +59,7 @@
             const encodedPaths = encodeURIComponent(JSON.stringify(paths));
 
             // ✅ Redirect to the API endpoint with query parameters (triggers file download)
-            window.location.href = `http://localhost:8000/create-zip?apikey=${apikey}&paths=${encodedPaths}`;
+            window.location.href = `http://localhost:80/create-zip?apikey=${apikey}&paths=${encodedPaths}`;
         }
     </script>
 

@@ -1,4 +1,4 @@
-module example.com/gozipstreamer
+module gozipstreamer
 
 go 1.23.3
 
