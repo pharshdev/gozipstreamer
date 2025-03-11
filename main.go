@@ -13,11 +13,8 @@ import (
 	"github.com/gorilla/mux"
 )
 
-// File represents a file entry in the JSON descriptor
-type File struct {
-	URL     string `json:"url,omitempty"`
-	ZipPath string `json:"zipPath"`
-}
+// File size mapping (ZipPath -> Size)
+var fileSizeMap map[string]int64
 
 // APIResponse represents the structure of the API response from Premiumize.me
 type APIResponse struct {
@@ -27,18 +24,14 @@ type APIResponse struct {
 		Name       string `json:"name"`
 		Type       string `json:"type"`
 		DirectLink string `json:"directlink,omitempty"`
+		Size       int64  `json:"size"`
 	} `json:"content"`
 	Name     string `json:"name"`
 	FolderID string `json:"folder_id"`
 	ParentID string `json:"parent_id"`
 }
 
-// Serve the HTML page
-func serveHTML(w http.ResponseWriter, r *http.Request) {
-	http.ServeFile(w, r, "index.html")
-}
-
-// fetchFolderContents retrieves the contents of a folder from the Premiumize.me API
+// fetchFolderContents retrieves the contents of a folder from Premiumize.me API
 func fetchFolderContents(apiKey, path string) (*APIResponse, error) {
 	encodedPath := strings.ReplaceAll(path, " ", "%20") // Encode spaces
 	apiURL := fmt.Sprintf("https://www.premiumize.me/api/folder/list?apikey=%s&path=%s", apiKey, encodedPath)
@@ -65,32 +58,30 @@ func fetchFolderContents(apiKey, path string) (*APIResponse, error) {
 	return &apiResponse, nil
 }
 
-// traverseFolder recursively traverses the folder and its subfolders to build the file list
+// traverseFolder recursively builds the file list & tracks sizes
 func traverseFolder(apiKey, path, parentZipPath string, files *[]*zipstreamer.FileEntry, rootPath string) error {
 	apiResponse, err := fetchFolderContents(apiKey, path)
 	if err != nil {
 		return err
 	}
 
-	// Compute correct relative path including the root folder name
 	var relativeZipPath string
 	if path == rootPath {
-		relativeZipPath = filepath.Base(rootPath) // Use the root folder name
+		relativeZipPath = filepath.Base(rootPath)
 	} else {
 		relativeZipPath = filepath.Join(parentZipPath, apiResponse.Name)
 	}
 
-	// Traverse contents of the folder
 	for _, item := range apiResponse.Content {
-		currentZipPath := filepath.Join(relativeZipPath, item.Name) // Keeps root folder name
+		currentZipPath := filepath.Join(relativeZipPath, item.Name)
 
 		if item.Type == "file" {
 			entry, err := zipstreamer.NewFileEntry(item.DirectLink, currentZipPath)
 			if err == nil {
-				*files = append(*files, entry) // Append zipstreamer.FileEntry instead of File
+				*files = append(*files, entry)
+				fileSizeMap[currentZipPath] = item.Size // Store file size in map
 			}
 		} else if item.Type == "folder" {
-			// Pass `relativeZipPath` correctly to maintain folder hierarchy
 			err := traverseFolder(apiKey, filepath.Join(path, item.Name), relativeZipPath, files, rootPath)
 			if err != nil {
 				return err
@@ -101,9 +92,47 @@ func traverseFolder(apiKey, path, parentZipPath string, files *[]*zipstreamer.Fi
 	return nil
 }
 
+// calculateZipSize computes the estimated ZIP file size
+func calculateZipSize(files []*zipstreamer.FileEntry) (int64, int64, int64, int64) {
+	const localHeaderSize = 30
+	const centralDirSize = 46
+	const eocdSize = 22
+
+	var totalLocalHeaders int64
+	var totalFileData int64
+	var totalCentralDir int64
+
+	for _, file := range files {
+		var zipPath string
+		if zipPathMethod, ok := interface{}(file).(interface{ ZipPath() string }); ok {
+			zipPath = zipPathMethod.ZipPath()
+		} else {
+			zipPath = file.ZipPath()
+		}
+
+		filenameLen := int64(len(zipPath))
+		fileSize := fileSizeMap[zipPath]
+
+		totalLocalHeaders += localHeaderSize + filenameLen
+		totalFileData += fileSize
+		totalCentralDir += centralDirSize + filenameLen
+	}
+
+	totalZipSize := totalLocalHeaders + totalFileData + totalCentralDir + eocdSize
+
+	// Log the size breakdown
+	fmt.Printf("ZIP Size Breakdown:\n")
+	fmt.Printf("  - Local Headers: %d bytes\n", totalLocalHeaders)
+	fmt.Printf("  - File Data: %d bytes\n", totalFileData)
+	fmt.Printf("  - Central Directory: %d bytes\n", totalCentralDir)
+	fmt.Printf("  - End of Central Directory: %d bytes\n", eocdSize)
+	fmt.Printf("  - Total ZIP Size: %d bytes\n", totalZipSize)
+
+	return totalZipSize, totalLocalHeaders, totalFileData, totalCentralDir
+}
+
 // zipHandler handles API requests to generate ZIP
 func zipHandler(w http.ResponseWriter, r *http.Request) {
-	// Support GET requests
 	if r.Method == "GET" {
 		apiKey := r.URL.Query().Get("apikey")
 		pathsParam := r.URL.Query().Get("paths")
@@ -113,7 +142,6 @@ func zipHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Decode paths JSON from query string
 		var paths []string
 		err := json.Unmarshal([]byte(pathsParam), &paths)
 		if err != nil {
@@ -121,37 +149,16 @@ func zipHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Call the function to process paths
 		processZipRequest(w, apiKey, paths)
-		return
-	}
-
-	// Support POST requests (for API calls)
-	if r.Method == "POST" {
-		var requestData struct {
-			ApiKey string   `json:"apikey"`
-			Paths  []string `json:"paths"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&requestData); err != nil {
-			http.Error(w, "Invalid JSON request", http.StatusBadRequest)
-			return
-		}
-
-		if requestData.ApiKey == "" || len(requestData.Paths) == 0 {
-			http.Error(w, "Missing API key or paths", http.StatusBadRequest)
-			return
-		}
-
-		// Call the function to process paths
-		processZipRequest(w, requestData.ApiKey, requestData.Paths)
 		return
 	}
 
 	http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 }
 
-// Function to handle ZIP processing (directly using `zipstreamer`)
+// Function to handle ZIP processing
 func processZipRequest(w http.ResponseWriter, apiKey string, paths []string) {
+	fileSizeMap = make(map[string]int64) // Initialize file size map
 	var fileEntries []*zipstreamer.FileEntry
 
 	// Recursively fetch all files and subfolders
@@ -163,46 +170,51 @@ func processZipRequest(w http.ResponseWriter, apiKey string, paths []string) {
 		}
 	}
 
-	// Handle case when no files are found
+	// Handle empty folder case
 	if len(fileEntries) == 0 {
 		fmt.Println("Empty folder detected. Returning an empty ZIP.")
 		w.Header().Set("Content-Type", "application/zip")
 		w.Header().Set("Content-Disposition", "attachment; filename=empty.zip")
 
-		// Create an empty ZIP file in memory
 		zipWriter := zip.NewWriter(w)
-		zipWriter.Close() // Close immediately to create an empty ZIP structure
+		zipWriter.Close()
 		return
 	}
 
-	// Create ZIP stream with the collected files
+	// Compute ZIP size breakdown
+	zipSize, totalLocalHeaders, totalFileData, totalCentralDir := calculateZipSize(fileEntries)
+
+	// Log the computed ZIP size details
+	fmt.Printf("\nFinal ZIP Size: %d bytes\n", zipSize)
+	fmt.Printf("  - Headers: %d bytes\n", totalLocalHeaders)
+	fmt.Printf("  - Actual File Data: %d bytes\n", totalFileData)
+	fmt.Printf("  - Central Directory: %d bytes\n", totalCentralDir)
+
+	// Set headers for ZIP download
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition", "attachment; filename=archive.zip")
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", zipSize))
+	w.Header().Set("Accept-Ranges", "bytes") // Enables Range Requests
+
+	// Create ZIP stream
 	zipStream, err := zipstreamer.NewZipStream(fileEntries, w)
 	if err != nil {
 		http.Error(w, "Failed to create ZIP stream", http.StatusInternalServerError)
 		return
 	}
 
-	// Set headers for ZIP download
-	w.Header().Set("Content-Type", "application/zip")
-	w.Header().Set("Content-Disposition", "attachment; filename=archive.zip")
-
-	// Stream ZIP file to client
 	if err := zipStream.StreamAllFiles(); err != nil {
 		http.Error(w, "Failed to stream ZIP", http.StatusInternalServerError)
 	}
 }
 
 func main() {
-	// Set up the API server
 	r := mux.NewRouter()
 
-	// Serve the web page
+	// If serving an HTML page, re-add this:
 	r.HandleFunc("/", serveHTML).Methods("GET")
 
-	// Serve static files (for CSS, JS, images if needed)
-	r.PathPrefix("/static/").Handler(http.StripPrefix("/static/", http.FileServer(http.Dir("static"))))
-
-	// Handle ZIP creation
+	// Handle ZIP streaming requests
 	r.HandleFunc("/create-zip", zipHandler).Methods("GET", "POST")
 
 	fmt.Println("Server started on :80")
@@ -210,4 +222,8 @@ func main() {
 		fmt.Printf("Error starting server: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+func serveHTML(w http.ResponseWriter, r *http.Request) {
+	http.ServeFile(w, r, "index.html")
 }
